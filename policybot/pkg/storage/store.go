@@ -59,5 +59,6 @@ type Store interface {
 	QueryMaintainersByOrg(context context.Context, orgID string, cb func(*Maintainer) error) error
 	QueryMaintainerInfo(context context.Context, maintainer *Maintainer) (*MaintainerInfo, error)
 	QueryIssuesByRepo(context context.Context, orgID string, repoID string, cb func(*Issue) error) error
+	QueryOpenIssuesByRepo(context context.Context, orgID string, repoID string, cb func(*Issue) error) error
 	QueryTestFlakeIssues(context context.Context, inactiveDays, createdDays int) ([]*Issue, error)
 }

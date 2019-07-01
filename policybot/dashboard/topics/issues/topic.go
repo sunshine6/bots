@@ -39,12 +39,12 @@ type topic struct {
 }
 
 type IssueSummary struct {
-	Repo        string   `json:"repo"`
-	Number      int64    `json:"number"`
-	Title       string   `json:"title"`
-	State       string   `json:"state"`
-	AuthorID    string   `json:"author_id"`
-	AssigneeIDs []string `json:"assignee_ids"`
+	Repo        string `json:"repo"`
+	Number      int64  `json:"number"`
+	Title       string `json:"title"`
+	State       string `json:"state"`
+	AuthorLogin string `json:"author_login"`
+	Assignees   string `json:"assignees"`
 }
 
 func NewTopic(store storage.Store, cache *cache.Cache) dashboard.Topic {
@@ -125,8 +125,12 @@ func (t *topic) getIssues(context context.Context, orgLogin string) ([]IssueSumm
 		return nil, util.HTTPErrorf(http.StatusNotFound, "no information available on organization %s", orgLogin)
 	}
 
-	repoName := "istio"
-	repo, err := t.cache.ReadRepoByName(context, org.OrgID, repoName)
+	// TODO: Allow user to select repo
+	return t.getIssuesForRepo(context, org.OrgID, "istio")
+}
+
+func (t *topic) getIssuesForRepo(context context.Context, orgID string, repoName string) ([]IssueSummary, error) {
+	repo, err := t.cache.ReadRepoByName(context, orgID, repoName)
 	if err != nil {
 		return nil, util.HTTPErrorf(http.StatusInternalServerError, "unable to get information on repository %s: %v", repoName, err)
 	} else if repo == nil {
@@ -134,14 +138,28 @@ func (t *topic) getIssues(context context.Context, orgLogin string) ([]IssueSumm
 	}
 
 	var issues []IssueSummary
-	if err = t.store.QueryIssuesByRepo(context, org.OrgID, repo.RepoID, func(i *storage.Issue) error {
+	if err = t.store.QueryOpenIssuesByRepo(context, orgID, repo.RepoID, func(i *storage.Issue) error {
+
+		assignees := ""
+		for _, assigneeID := range i.AssigneeIDs {
+			if assignees != "" {
+				assignees += ",\n"
+			}
+			assignees += t.getUser(context, assigneeID)
+		}
+
+		title := i.Title
+		if len(title) > 50 {
+			title = title[0:50] + ". . ."
+		}
+
 		issues = append(issues, IssueSummary{
 			Repo:        repoName,
 			Number:      i.Number,
-			Title:       i.Title,
+			Title:       title,
 			State:       i.State,
-			AuthorID:    i.AuthorID,
-			AssigneeIDs: i.AssigneeIDs,
+			AuthorLogin: t.getUser(context, i.AuthorID),
+			Assignees:   assignees,
 		})
 		return nil
 	}); err != nil {
@@ -149,4 +167,13 @@ func (t *topic) getIssues(context context.Context, orgLogin string) ([]IssueSumm
 	}
 
 	return issues, nil
+}
+
+func (t *topic) getUser(context context.Context, authorID string) string {
+	authorName := "unknown"
+	author, authorErr := t.cache.ReadUser(context, authorID)
+	if authorErr == nil && author != nil {
+		authorName = author.Login
+	}
+	return authorName
 }

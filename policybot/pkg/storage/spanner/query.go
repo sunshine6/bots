@@ -67,6 +67,20 @@ func (s store) QueryIssuesByRepo(context context.Context, orgID string, repoID s
 	return err
 }
 
+func (s store) QueryOpenIssuesByRepo(context context.Context, orgID string, repoID string, cb func(*storage.Issue) error) error {
+	iter := s.client.Single().Query(context, spanner.Statement{SQL: fmt.Sprintf("SELECT * FROM Issues WHERE OrgID = '%s' AND RepoID = '%s' AND State = 'open';", orgID, repoID)})
+	err := iter.Do(func(row *spanner.Row) error {
+		issue := &storage.Issue{}
+		if err := row.ToStruct(issue); err != nil {
+			return err
+		}
+
+		return cb(issue)
+	})
+
+	return err
+}
+
 func (s store) QueryIssueCountByOrg(context context.Context, orgID string, repoID string, cb func(*storage.IssueCount) error) error {
 	iter := s.client.Single().Query(context, spanner.Statement{SQL: fmt.Sprintf("SELECT RepoID, State, COUNT(*) FROM Issues WHERE OrgID = '%s' GROUP BY 1, 2;", orgID)})
 	err := iter.Do(func(row *spanner.Row) error {

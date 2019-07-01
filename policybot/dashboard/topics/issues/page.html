@@ -57,13 +57,13 @@ This will display information about GitHub issues.
 						stateCell.innerText = issues[i].state;
 						row.appendChild(stateCell);
 
-						const authorIdCell = document.createElement("td");
-						authorIdCell.innerText = issues[i].author_id;
-						row.appendChild(authorIdCell);
+						const authorLoginCell = document.createElement("td");
+						authorLoginCell.innerText = issues[i].author_login;
+						row.appendChild(authorLoginCell);
 
-						const assigneeIdsCell = document.createElement("td");
-						assigneeIdsCell.innerText = issues[i].assignee_ids;
-						row.appendChild(assigneeIdsCell);
+						const assigneesCell = document.createElement("td");
+						assigneesCell.innerText = issues[i].assignees;
+						row.appendChild(assigneesCell);
 
 				    tbody.appendChild(row);
 				}
