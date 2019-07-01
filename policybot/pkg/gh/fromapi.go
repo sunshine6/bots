@@ -15,7 +15,7 @@
 package gh
 
 import (
-	api "github.com/google/go-github/v25/github"
+	api "github.com/google/go-github/v26/github"
 
 	"istio.io/bots/policybot/pkg/storage"
 )
@@ -58,6 +58,18 @@ func IssueCommentFromAPI(orgID string, repoID string, issueID string, issueComme
 		CreatedAt:      issueComment.GetCreatedAt(),
 		UpdatedAt:      issueComment.GetUpdatedAt(),
 		AuthorID:       issueComment.GetUser().GetNodeID(),
+	}
+}
+
+func RepoCommentFromAPI(orgID string, repoID string, comment *api.RepositoryComment) *storage.RepoComment {
+	return &storage.RepoComment{
+		OrgID:     orgID,
+		RepoID:    repoID,
+		CommentID: comment.GetNodeID(),
+		Body:      comment.GetBody(),
+		CreatedAt: comment.GetCreatedAt(),
+		UpdatedAt: comment.GetUpdatedAt(),
+		AuthorID:  comment.GetUser().GetNodeID(),
 	}
 }
 

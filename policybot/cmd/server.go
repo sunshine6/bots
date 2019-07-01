@@ -15,11 +15,44 @@
 package cmd
 
 import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"net"
+	"net/http"
+	"time"
+
+	"github.com/gorilla/mux"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/grpclog"
 
+	"istio.io/bots/policybot/dashboard"
+	"istio.io/bots/policybot/dashboard/topics/commithub"
+	"istio.io/bots/policybot/dashboard/topics/coverage"
+	"istio.io/bots/policybot/dashboard/topics/features"
+	"istio.io/bots/policybot/dashboard/topics/flakes"
+	"istio.io/bots/policybot/dashboard/topics/home"
+	"istio.io/bots/policybot/dashboard/topics/issues"
+	"istio.io/bots/policybot/dashboard/topics/maintainers"
+	"istio.io/bots/policybot/dashboard/topics/members"
+	"istio.io/bots/policybot/dashboard/topics/perf"
+	"istio.io/bots/policybot/dashboard/topics/pullrequests"
+	"istio.io/bots/policybot/handlers/flakechaser"
+	"istio.io/bots/policybot/handlers/githubwebhook"
+	"istio.io/bots/policybot/handlers/githubwebhook/filters"
+	"istio.io/bots/policybot/handlers/githubwebhook/filters/cfgmonitor"
+	"istio.io/bots/policybot/handlers/githubwebhook/filters/labeler"
+	"istio.io/bots/policybot/handlers/githubwebhook/filters/nagger"
+	"istio.io/bots/policybot/handlers/githubwebhook/filters/refresher"
+	"istio.io/bots/policybot/handlers/syncer"
+	"istio.io/bots/policybot/handlers/zenhubwebhook"
+	"istio.io/bots/policybot/pkg/blobstorage/gcs"
 	"istio.io/bots/policybot/pkg/config"
-	"istio.io/bots/policybot/pkg/server"
+	"istio.io/bots/policybot/pkg/gh"
+	"istio.io/bots/policybot/pkg/storage/cache"
+	"istio.io/bots/policybot/pkg/storage/spanner"
+	"istio.io/bots/policybot/pkg/util"
+	"istio.io/bots/policybot/pkg/zh"
 	"istio.io/pkg/ctrlz"
 	"istio.io/pkg/env"
 	"istio.io/pkg/log"
@@ -79,7 +112,7 @@ func serverCmd() *cobra.Command {
 			}
 
 			cmd.SilenceUsage = true
-			return server.RunServer(ca)
+			return runServer(ca)
 		},
 	}
 
@@ -115,3 +148,165 @@ func serverCmd() *cobra.Command {
 type dummyIoWriter struct{}
 
 func (dummyIoWriter) Write([]byte) (int, error) { return 0, nil }
+
+// Server represents a running bot instance.
+type server struct {
+	listener net.Listener
+}
+
+// Runs the server.
+//
+// If config comes from a container-based file, this will try to run the server, but if
+// problems occur (probably due to bad config), then the function returns with an error.
+//
+// If config comes from a repo-based file, this will also try to run the server, but if an error
+// occurs, it will refetch the config every minute and try again. And so in that case, this
+// function never returns.
+func runServer(base *config.Args) error {
+	for {
+		// copy the baseline config
+		c := *base
+		cfg := &c
+
+		// load the config file
+		if err := cfg.Fetch(); err != nil {
+			if cfg.StartupOptions.ConfigRepo != "" {
+				log.Errorf("Unable to load configuration file, waiting for 1 minute and then will try again: %v", err)
+				time.Sleep(time.Minute)
+				continue
+			} else {
+				return fmt.Errorf("unable to load configuration file: %v", err)
+			}
+		}
+
+		if err := runWithConfig(cfg); err != nil {
+			if cfg.StartupOptions.ConfigRepo != "" {
+				log.Errorf("Unable to initialize server likely due to bad config, waiting for 1 minute and then will try again: %v", err)
+				time.Sleep(time.Minute)
+			} else {
+				return fmt.Errorf("unable to initialize server: %v", err)
+			}
+		} else {
+			log.Infof("Configuration change detected, attempting to reload configuration")
+		}
+	}
+}
+
+func runWithConfig(a *config.Args) error {
+	log.Debugf("Starting with:\n%s", a)
+
+	creds, err := base64.StdEncoding.DecodeString(a.StartupOptions.GCPCredentials)
+	if err != nil {
+		return fmt.Errorf("unable to decode GCP credentials: %v", err)
+	}
+
+	ght := gh.NewThrottledClient(context.Background(), a.StartupOptions.GitHubToken)
+	zht := zh.NewThrottledClient(a.StartupOptions.ZenHubToken)
+	_ = util.NewMailer(a.StartupOptions.SendGridAPIKey, a.EmailFrom, a.EmailOriginAddress)
+
+	store, err := spanner.NewStore(context.Background(), a.SpannerDatabase, creds)
+	if err != nil {
+		return fmt.Errorf("unable to create storage layer: %v", err)
+	}
+	defer store.Close()
+
+	bs, err := gcs.NewStore(context.Background(), creds)
+	if err != nil {
+		return fmt.Errorf("unable to create blob storage lsyer: %v", err)
+	}
+	defer bs.Close()
+
+	cache := cache.New(store, a.CacheTTL)
+
+	nag, err := nagger.NewNagger(ght, cache, a.Orgs, a.Nags)
+	if err != nil {
+		return fmt.Errorf("unable to create nagger: %v", err)
+	}
+
+	labeler, err := labeler.NewLabeler(ght, cache, a.Orgs, a.AutoLabels)
+	if err != nil {
+		return fmt.Errorf("unable to create labeler: %v", err)
+	}
+
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", a.StartupOptions.Port))
+	if err != nil {
+		return fmt.Errorf("unable to listen to port: %v", err)
+	}
+
+	router := mux.NewRouter()
+
+	httpServer := http.Server{
+		Addr:           listener.Addr().(*net.TCPAddr).String(),
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+		Handler:        router,
+	}
+
+	s := &server{
+		listener: listener,
+	}
+
+	monitor, err := cfgmonitor.NewMonitor(ght, a.StartupOptions.ConfigRepo, a.StartupOptions.ConfigFile, s.Close)
+	if err != nil {
+		return fmt.Errorf("unable to create config monitor: %v", err)
+	}
+
+	// github webhook filters (keep refresher first in the list such that other filter see an up-to-date view in storage)
+	filters := []filters.Filter{
+		refresher.NewRefresher(cache, ght, a.Orgs),
+		nag,
+		labeler,
+		monitor,
+	}
+
+	ghHandler, err := githubwebhook.NewHandler(a.StartupOptions.GitHubWebhookSecret, filters...)
+	if err != nil {
+		return fmt.Errorf("unable to create GitHub webhook: %v", err)
+	}
+
+	if a.StartupOptions.HTTPSOnly {
+		// we only want https
+		router.Headers("X-Forwarded-Proto", "HTTP").HandlerFunc(handleHTTP)
+	}
+
+	// top-level handlers
+	router.Handle("/githubwebhook", ghHandler).Methods("POST")
+	router.Handle("/flakechaser", flakechaser.New(ght, store, cache, a.FlakeChaser)).Methods("GET")
+	router.Handle("/zenhubwebhook", zenhubwebhook.NewHandler(store, cache)).Methods("POST")
+	router.Handle("/sync", syncer.NewHandler(context.Background(), ght, cache, zht, store, bs, a.Orgs)).Methods("GET")
+
+	// UI topics
+	dashboard := dashboard.New(router, a.StartupOptions.GitHubOAuthClientID, a.StartupOptions.GitHubOAuthClientSecret)
+	dashboard.RegisterTopic(maintainers.NewTopic(store, cache))
+	dashboard.RegisterTopic(members.NewTopic(store, cache))
+	dashboard.RegisterTopic(issues.NewTopic(store, cache))
+	dashboard.RegisterTopic(pullrequests.NewTopic(store, cache))
+	dashboard.RegisterTopic(perf.NewTopic(store, cache))
+	dashboard.RegisterTopic(commithub.NewTopic(store, cache))
+	dashboard.RegisterTopic(flakes.NewTopic(store, cache))
+	dashboard.RegisterTopic(coverage.NewTopic(store, cache))
+	dashboard.RegisterTopic(features.NewTopic(store, cache))
+	dashboard.RegisterTopic(home.NewTopic(dashboard.Topics()))
+	dashboard.RegisterPageNotFound()
+
+	log.Infof("Listening on port %d", a.StartupOptions.Port)
+	err = httpServer.Serve(s.listener)
+	if err != http.ErrServerClosed {
+		return fmt.Errorf("listening on port %d failed: %v", a.StartupOptions.Port, err)
+	}
+
+	return nil
+}
+
+func (s *server) Close() {
+	if s.listener != nil {
+		if err := s.listener.Close(); err != nil {
+			log.Warnf("Error shutting down: %v", err)
+		}
+	}
+}
+
+func handleHTTP(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, fmt.Sprintf("https://%s%s", r.Host, r.URL), http.StatusPermanentRedirect)
+}
