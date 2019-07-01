@@ -1,15 +1,74 @@
-<aside class="callout warning">
-    <div class="type">
-        <svg class="large-icon">
-            <use xlink:href="/icons/icons.svg#callout-warning">
-            </use>
-        </svg>
-    </div>
-    <div class="content">
-        This page is under construction
-    </div>
-</aside>
-
 <p>
 This will display information about GitHub issues.
 </p>
+
+<table>
+    <thead>
+    <tr>
+				<th>Repository</th>
+				<th>Number</th>
+				<th>Title</th>
+				<th>State</th>
+				<th>AuthorID</th>
+				<th>AssigneeIDs</th>
+    </tr>
+    </thead>
+    <tbody id="tbody">
+    </tbody>
+</table>
+
+<script>
+    "use strict";
+
+    function refreshIssues() {
+        const url = window.location.protocol + "//" + window.location.host + "/issuesapi/";
+
+		fetch(url)
+			.then(response => {
+				if (response.status !== 200) {
+					return "Unable to access " + url + ": " + response.statusText;
+				}
+
+				return response.text();
+			})
+			.catch(e => {
+				return "Unable to access " + url + ": " + e;
+			})
+			.then(data => {
+                const issues = JSON.parse(data);
+
+				const tbody = document.getElementById("tbody");
+				for (let i = 0; i < issues.length; i++) {
+				    const row = document.createElement("tr");
+
+				    const repoCell = document.createElement("td");
+				    repoCell.innerText = issues[i].repo;
+				    row.appendChild(repoCell);
+
+				    const numberCell = document.createElement("td");
+				    numberCell.innerText = issues[i].number;
+				    row.appendChild(numberCell);
+
+				    const titleCell = document.createElement("td");
+				    titleCell.innerText = issues[i].title;
+						row.appendChild(titleCell);
+
+						const stateCell = document.createElement("td");
+						stateCell.innerText = issues[i].state;
+						row.appendChild(stateCell);
+
+						const authorIdCell = document.createElement("td");
+						authorIdCell.innerText = issues[i].author_id;
+						row.appendChild(authorIdCell);
+
+						const assigneeIdsCell = document.createElement("td");
+						assigneeIdsCell.innerText = issues[i].assignee_ids;
+						row.appendChild(assigneeIdsCell);
+
+				    tbody.appendChild(row);
+				}
+			});
+    }
+
+    refreshIssues();
+</script>

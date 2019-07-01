@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-// This file defines the shapes we csn read/write to/from the DB.
+// This file defines the shapes we can read/write to/from the DB.
 
 type Issue struct {
 	OrgID       string
@@ -45,6 +45,12 @@ type IssueComment struct {
 	Body           string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+}
+
+type IssueCount struct {
+	RepoID string
+	State  string
+	Count  int64
 }
 
 type User struct {

@@ -67,12 +67,26 @@ func (s store) QueryIssuesByRepo(context context.Context, orgID string, repoID s
 	return err
 }
 
+func (s store) QueryIssueCountByOrg(context context.Context, orgID string, repoID string, cb func(*storage.IssueCount) error) error {
+	iter := s.client.Single().Query(context, spanner.Statement{SQL: fmt.Sprintf("SELECT RepoID, State, COUNT(*) FROM Issues WHERE OrgID = '%s' GROUP BY 1, 2;", orgID)})
+	err := iter.Do(func(row *spanner.Row) error {
+		issue := &storage.IssueCount{}
+		if err := row.ToStruct(issue); err != nil {
+			return err
+		}
+
+		return cb(issue)
+	})
+
+	return err
+}
+
 func (s store) QueryTestFlakeIssues(context context.Context, inactiveDays, createdDays int) ([]*storage.Issue, error) {
 	sql := `SELECT * from Issues
-	WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), UpdatedAt, DAY) > @inactiveDays AND 
+	WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), UpdatedAt, DAY) > @inactiveDays AND
 				TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), CreatedAt, DAY) < @createdDays AND
 				State = 'open' AND
-				( REGEXP_CONTAINS(title, 'flak[ey]') OR 
+				( REGEXP_CONTAINS(title, 'flak[ey]') OR
   				  REGEXP_CONTAINS(body, 'flake[ey]')
 				);`
 	stmt := spanner.NewStatement(sql)
