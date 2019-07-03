@@ -66,57 +66,55 @@ This will display information about GitHub issues.
 <script>
     "use strict";
 
-    function refreshIssues() {
-        const url = window.location.protocol + "//" + window.location.host + "/issuesapi/";
+    function getIssues() {
+      let wsurl = "ws://" + window.location.host + "/issuesapi/" + window.location.search;
+      if (window.location.protocol === "https:") {
+        wsurl = "wss://" + window.location.host + "/issuesapi/" + window.location.search;
+      }
 
-		fetch(url)
-			.then(response => {
-				if (response.status !== 200) {
-					return "Unable to access " + url + ": " + response.statusText;
-				}
+      const ws = new WebSocket(wsurl);
 
-				return response.text();
-			})
-			.catch(e => {
-				return "Unable to access " + url + ": " + e;
-			})
-			.then(data => {
-                const issues = JSON.parse(data);
+      const url = window.location.protocol + "//" + window.location.host + "/issuesapi/";
+      const tbody = document.getElementById("tbody");
 
-				const tbody = document.getElementById("tbody");
+      ws.onmessage = evt => {
+        console.log(evt)
+
+        const issues = JSON.parse(evt.data);
+
 				for (let i = 0; i < issues.length; i++) {
-				    const row = document.createElement("tr");
+				  const row = document.createElement("tr");
 
-				    const repoCell = document.createElement("td");
-				    repoCell.innerText = issues[i].repo;
-				    row.appendChild(repoCell);
+				  const repoCell = document.createElement("td");
+				  repoCell.innerText = issues[i].repo;
+				  row.appendChild(repoCell);
 
-				    const numberCell = document.createElement("td");
-				    numberCell.innerText = issues[i].number;
-				    row.appendChild(numberCell);
+  		    const numberCell = document.createElement("td");
+	  	    numberCell.innerText = issues[i].number;
+		      row.appendChild(numberCell);
 
-				    const titleCell = document.createElement("td");
-				    titleCell.innerText = issues[i].title;
-						row.appendChild(titleCell);
+			    const titleCell = document.createElement("td");
+			    titleCell.innerText = issues[i].title;
+					row.appendChild(titleCell);
 
-						const stateCell = document.createElement("td");
-						stateCell.innerText = issues[i].state;
-						row.appendChild(stateCell);
+					const stateCell = document.createElement("td");
+					stateCell.innerText = issues[i].state;
+					row.appendChild(stateCell);
 
-						const authorLoginCell = document.createElement("td");
-						authorLoginCell.innerText = issues[i].author_login;
-						row.appendChild(authorLoginCell);
+					const authorLoginCell = document.createElement("td");
+					authorLoginCell.innerText = issues[i].author_login;
+					row.appendChild(authorLoginCell);
 
-						const assigneesCell = document.createElement("td");
-						assigneesCell.innerText = issues[i].assignees;
-						row.appendChild(assigneesCell);
+					const assigneesCell = document.createElement("td");
+					assigneesCell.innerText = issues[i].assignees;
+					row.appendChild(assigneesCell);
 
-				    tbody.appendChild(row);
-				}
-			});
+				  tbody.appendChild(row);
+			  }
+      }
     }
 
-    refreshIssues();
+    getIssues();
 </script>
 `)
 

@@ -18,16 +18,19 @@ package issues
 
 import (
 	"context"
+	"fmt"
 	"html/template"
 	"net/http"
 	"strings"
 
 	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
 
 	"istio.io/bots/policybot/dashboard"
 	"istio.io/bots/policybot/pkg/storage"
 	"istio.io/bots/policybot/pkg/storage/cache"
 	"istio.io/bots/policybot/pkg/util"
+	"istio.io/pkg/log"
 )
 
 type topic struct {
@@ -105,16 +108,25 @@ func (t *topic) handleListIssuesHTML(w http.ResponseWriter, r *http.Request) {
 func (t *topic) handleListIssuesJSON(w http.ResponseWriter, r *http.Request) {
 	orgLogin := r.URL.Query().Get("org")
 	if orgLogin == "" {
-		orgLogin = "istio" // TODO: remove istio dependency
+		orgLogin = t.options.DefaultOrg
 	}
+
+	// turn the connection into a web socket
+	var upgrader websocket.Upgrader
+	c, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		util.RenderError(w, util.HTTPErrorf(http.StatusInternalServerError, "%v", err))
+		return
+	}
+	defer c.Close()
 
 	issues, err := t.getIssues(r.Context(), orgLogin)
 	if err != nil {
-		t.context.RenderHTMLError(w, err)
-		return
+		log.Errorf("Returning error on websocket: %v", err)
+		_ = c.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("%v", err)))
+	} else {
+		c.WriteJSON(issues)
 	}
-
-	t.context.RenderJSON(w, http.StatusOK, issues)
 }
 
 func (t *topic) getIssues(context context.Context, orgLogin string) ([]IssueSummary, error) {
